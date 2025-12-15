@@ -1,46 +1,54 @@
 # -*- coding: utf-8 -*-
+
+import json
+import re
+import os
 import torch
-from triplet_work_loader import load_data
-from config import Config
-from triplet_model import SiameseNetwork, choose_optimizer
+import random
 import jieba
-
+import numpy as np
+from torch.utils.data import Dataset, DataLoader
+from collections import defaultdict
 """
-模型效果测试
+数据加载
 """
 
-class Predictor:
-    def __init__(self, config, model, knwb_data):
+
+class DataGenerator:
+    def __init__(self, data_path, config):
         self.config = config
-        self.model = model
-        self.train_data = knwb_data
-        if torch.cuda.is_available():
-            self.model = model.cuda()
-        else:
-            self.model = model.cpu()
-        self.model.eval()
-        self.knwb_to_vector()
+        self.path = data_path
+        self.vocab = load_vocab(config["vocab_path"])
+        self.config["vocab_size"] = len(self.vocab)
+        self.schema = load_schema(config["schema_path"])
+        self.train_data_size = config["epoch_data_size"] #由于采取随机采样，所以需要设定一个采样数量，否则可以一直采
+        self.data_type = None  #用来标识加载的是训练集还是测试集 "train" or "test"
+        self.load()
 
-    #将知识库中的问题向量化，为匹配做准备
-    #每轮训练的模型参数不一样，生成的向量也不一样，所以需要每轮测试都重新进行向量化
-    def knwb_to_vector(self):
-        self.question_index_to_standard_question_index = {}
-        self.question_ids = []
-        self.vocab = self.train_data.dataset.vocab
-        self.schema = self.train_data.dataset.schema
-        self.index_to_standard_question = dict((y, x) for x, y in self.schema.items())
-        for standard_question_index, question_ids in self.train_data.dataset.knwb.items():
-            for question_id in question_ids:
-                #记录问题编号到标准问题标号的映射，用来确认答案是否正确
-                self.question_index_to_standard_question_index[len(self.question_ids)] = standard_question_index
-                self.question_ids.append(question_id)
-        with torch.no_grad():
-            question_matrixs = torch.stack(self.question_ids, dim=0)
-            if torch.cuda.is_available():
-                question_matrixs = question_matrixs.cuda()
-            self.knwb_vectors = self.model(question_matrixs)
-            #将所有向量都作归一化 v / |v|
-            self.knwb_vectors = torch.nn.functional.normalize(self.knwb_vectors, dim=-1)
+    def load(self):
+        self.data = []
+        self.knwb = defaultdict(list)
+        with open(self.path, encoding="utf8") as f:
+            for line in f:
+                line = json.loads(line)
+                #加载训练集
+                if isinstance(line, dict):
+                    self.data_type = "train"
+                    questions = line["questions"]
+                    label = line["target"]
+                    for question in questions:
+                        input_id = self.encode_sentence(question)
+                        input_id = torch.LongTensor(input_id)
+                        self.knwb[self.schema[label]].append(input_id)
+                #加载测试集
+                else:
+                    self.data_type = "test"
+                    assert isinstance(line, list)
+                    question, label = line
+                    input_id = self.encode_sentence(question)
+                    input_id = torch.LongTensor(input_id)
+                    label_index = torch.LongTensor([self.schema[label]])
+                    self.data.append([input_id, label_index])
         return
 
     def encode_sentence(self, text):
@@ -51,29 +59,69 @@ class Predictor:
         else:
             for char in text:
                 input_id.append(self.vocab.get(char, self.vocab["[UNK]"]))
+        input_id = self.padding(input_id)
         return input_id
 
-    def predict(self, sentence):
-        input_id = self.encode_sentence(sentence)
-        input_id = torch.LongTensor([input_id])
-        if torch.cuda.is_available():
-            input_id = input_id.cuda()
-        with torch.no_grad():
-            test_question_vector = self.model(input_id) #不输入labels，使用模型当前参数进行预测
-            res = torch.mm(test_question_vector.unsqueeze(0), self.knwb_vectors.T)
-            hit_index = int(torch.argmax(res.squeeze())) #命中问题标号
-            hit_index = self.question_index_to_standard_question_index[hit_index] #转化成标准问编号
-        return  self.index_to_standard_question[hit_index]
+    #补齐或截断输入的序列，使其可以在一个batch内运算
+    def padding(self, input_id):
+        input_id = input_id[:self.config["max_length"]]
+        input_id += [0] * (self.config["max_length"] - len(input_id))
+        return input_id
+
+    def __len__(self):
+        if self.data_type == "train":
+            return self.config["epoch_data_size"]
+        else:
+            assert self.data_type == "test", self.data_type
+            return len(self.data)
+
+    def __getitem__(self, index):
+        if self.data_type == "train":
+            return self.random_train_sample() #随机生成一个训练样本
+        else:
+            return self.data[index]
+
+    #依照一定概率生成负样本或正样本
+    #负样本从随机两个不同的标准问题中各随机选取一个
+    #正样本从随机一个标准问题中随机选取两个
+    def random_train_sample(self):
+        standard_question_index = list(self.knwb.keys())
+        #随机两个正样本、一个负样本
+        p,n = random.sample(standard_question_index,2)
+        #如果选取到的标准问下不足两个问题，则无法选取，所以重新随机一次
+        if len(self.knwb[p]) < 2 or len(self.knwb[n]) < 2:
+            return self.random_train_sample()
+        else:
+            # 正样本两个
+            s1, s2 = random.sample(self.knwb[p], 2)
+            #负样本一个
+            s3 = random.sample(self.knwb[n], 1)
+            return [s1, s2, s3]
+
+
+#加载字表或词表
+def load_vocab(vocab_path):
+    token_dict = {}
+    with open(vocab_path, encoding="utf8") as f:
+        for index, line in enumerate(f):
+            token = line.strip()
+            token_dict[token] = index + 1  #0留给padding位置，所以从1开始
+    return token_dict
+
+#加载schema
+def load_schema(schema_path):
+    with open(schema_path, encoding="utf8") as f:
+        return json.loads(f.read())
+
+#用torch自带的DataLoader类封装数据
+def load_data(data_path, config, shuffle=True):
+    dg = DataGenerator(data_path, config)
+    dl = DataLoader(dg, batch_size=config["batch_size"], shuffle=shuffle)
+    return dl
+
+
 
 if __name__ == "__main__":
-    knwb_data = load_data(Config["train_data_path"], Config)
-    model = SiameseNetwork(Config)
-    model.load_state_dict(torch.load("model_output/epoch_10.pth"))
-    pd = Predictor(Config, model, knwb_data)
-
-    while True:
-        # sentence = "固定宽带服务密码修改"
-        sentence = input("请输入问题：")
-        res = pd.predict(sentence)
-        print(res)
-
+    from config import Config
+    dg = DataGenerator("valid_tag_news.json", Config)
+    print(dg[1])
