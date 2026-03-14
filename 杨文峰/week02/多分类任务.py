@@ -1,107 +1,96 @@
-# 5维向量，判断哪一个维度的值最大，就是第几类
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
+import numpy as np
 import torch.nn as nn
 
-# 1.建立线性层、采用交叉熵损失函数（选择模型结构）
-class TorchModel2(nn.Module):
-    def __init__(self,input_size):
-        super(TorchModel2, self).__init__()
-        self.linear = nn.Linear(input_size,5) #线性层
-        self.loss = nn.CrossEntropyLoss() #loss函数采用交叉熵损失函数（自带softmax归一化）
+class MultiClassfication(nn.Module):
+    def __init__(self, input_size):
+        super(MultiClassfication, self).__init__()
+        self.linear = nn.Linear(input_size,5)
+        self.loss = nn.functional.cross_entropy
 
-    # 当输入真实标签，返回loss值；无真实标签，返回预测值
-    def forward(self, x, y=None):
-        x = self.linear(x)
+    def forward(self,x,y = None):
+        y_pred = self.linear(x)
         if y is not None:
-            y_classes = torch.argmax(y, dim=1)
-            return self.loss(x,y_classes)  #预测值
+            return self.loss(y_pred, y)
         else:
-            return x
+            return torch.softmax(y_pred, axis = -1)
 
-# 2.生成一个样本，5维向量（训练样本选择）
-def bulid_sample():
+def build_sample():
     x = np.random.random(5)
-    m = np.argmax(x)
-    y = [0] * 5
-    y[m] = 1
-    return x,y,m
+    max_index = np.argmax(x)
+    return x, max_index
 
-# 3.随机生成一批样本（训练样本生成）
-def build_dataset(total_sample_num):
+def build_dataset(sample_num):
     X = []
     Y = []
-    Z = [0] * 5
-    for i in range(total_sample_num):
-        x, y,m = bulid_sample()
+    for i in range(sample_num):
+        x, y = build_sample()
         X.append(x)
         Y.append(y)
-        Z[m] += 1
-    return torch.FloatTensor(X), torch.FloatTensor(Y),Z
+    return torch.FloatTensor(X), torch.LongTensor(Y)
 
-# 4.测试代码准确率
-# 用来测试每轮模型的准确率
 def evaluate(model):
     model.eval()
-    test_sample_num = 200
-    x,y,z = build_dataset(test_sample_num)
-    print("这次预测了%d个一型样本，%d个二型样本，%d个三型样本，%d个四型样本，%d个五型样本" % (z[0], z[1], z[2], z[3], z[4]))
-
-    correct,wrong = 0,0
+    test_sample_num = 100
+    x, y = build_dataset(test_sample_num)
+    correct, wrong = 0, 0
     with torch.no_grad():
         y_pred = model(x)
-        y_pred_softmax = torch.softmax(y_pred, dim=1)
-        for y_p,y_t in zip(y_pred_softmax, y):
-            if torch.argmax(y_p) == torch.argmax(torch.tensor(y_t)):
+        for y_p, y_t in zip(y_pred, y):
+            if torch.argmax(y_p) == torch.argmax(y_t):
                 correct += 1
             else:
                 wrong += 1
-    print("正确预测个数：%d, 正确率%f" %(correct,correct / (correct + wrong)))
-    return correct / (correct + wrong)
+    print("Accuracy: {:.2f}%".format(correct * 100 / test_sample_num))
+    return correct / test_sample_num
 
-# 5.选择优化器、训练模型
 def main():
-    # 配置参数
-    epoch_num = 800 #训练轮数
-    batch_size = 100 #每次训练样本个数
-    train_sample = 5000 #每轮训练总共训练的样本总数
+    epoch_num = 20
+    batch_size = 20
+    train_sample_num = 2000
     input_size = 5
-    learning_rate = 0.0001
+    learning_rate = 0.001
 
-    #建立模型
-    model = TorchModel2(input_size)
+    model = MultiClassfication(input_size)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     log = []
-    train_x, train_y, train_z = build_dataset(train_sample)
-
+    train_x, train_y = build_dataset(train_sample_num)
     for epoch in range(epoch_num):
         model.train()
         watch_loss = []
-
-        for batch_index in range(train_sample // batch_size):
+        for batch_index in range(train_sample_num // batch_size):
             x = train_x[batch_index * batch_size:(batch_index + 1) * batch_size]
             y = train_y[batch_index * batch_size:(batch_index + 1) * batch_size]
-
-            loss = model(x,y)
+            loss = model(x, y)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             watch_loss.append(loss.item())
-
-        print("================\n第%d轮平均loss:%f" %(epoch + 1, np.mean(watch_loss)))
+        print("====================\n第%d轮平均loss:%f" % (epoch+1, np.mean(watch_loss)))
         acc = evaluate(model)
         log.append([acc, float(np.mean(watch_loss))])
-
+    torch.save(model.state_dict(), "model.pt")
     print(log)
-    plt.plot(range(len(log)), [l[0] for l in log],label="acc")
-    plt.plot(range(len(log)), [l[1] for l in log],label="loss")
-    plt.legend()
-    plt.show()
     return
+
+def predict(model_path , input_vector):
+    input_size = 5
+    model = MultiClassfication(input_size)
+    model.load_state_dict(torch.load(model_path))
+    print(model.state_dict())
+
+    model.eval()
+    with torch.no_grad():
+        input_tensor = torch.FloatTensor(input_vector).float()  # 确保是Float类型
+        result = model(input_tensor)
+        for vec,res in zip(input_vector, result):
+            print("输入：%s, 预测类别：%s,概率值：%s" % (vec,torch.argmax(res),res))
 
 if __name__ == "__main__":
     main()
+    test_vec = [[0.47889086, 0.15229675, 0.31082123, 0.03504317, 0.18920843],
+                [0.4963533, 0.5524256, 0.95758807, 0.65520434, 0.84890681],
+                [0.48797868, 0.67482528, 0.13625847, 0.34675372, 0.09871392],
+                [0.49349776, 0.59416669, 0.92579291, 0.41567412, 0.7358894]]
 
-
-
+    predict("model.pt", test_vec)
