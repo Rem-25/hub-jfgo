@@ -37,17 +37,17 @@ def evaluate(model):
     with torch.no_grad():
         y_pred = model(x)
         for y_p, y_t in zip(y_pred, y):
-            if torch.argmax(y_p) == torch.argmax(y_t):
+            if torch.argmax(y_p) == int(y_t):
                 correct += 1
             else:
                 wrong += 1
-    print("Accuracy: {:.2f}%".format(correct * 100 / test_sample_num))
-    return correct / test_sample_num
+    print("正确预测个数：%d, 正确率: %f" % (correct, correct / (correct + wrong)))
+    return correct / (correct + wrong)
 
 def main():
     epoch_num = 20
     batch_size = 20
-    train_sample_num = 2000
+    train_sample_num = 3000
     input_size = 5
     learning_rate = 0.001
 
