@@ -1,4 +1,3 @@
-#回溯算法实现
 Dict = {"经常":0.1,
         "经":0.05,
         "有":0.1,
@@ -11,25 +10,51 @@ Dict = {"经常":0.1,
         "意":0.05,
         "见分歧":0.05,
         "分":0.1}
-#待切分文本
-sentence = "经常有意见分歧"
-#实现全切分函数，输出根据字典能够切分出的所有的切分方式
-def all_cut(sentence, Dict):
-    target = []
-    def back_f(start,path):
-        if start == len(sentence):
-            target.append(path[:]) #浅拷贝
+
+def dag(sentence):
+    DAG = {}
+    length = len(sentence)
+    for k in range(length):
+        tmplist = []
+        i = k
+        frag = sentence[k]
+        while i < length:
+            if frag in Dict:
+                tmplist.append(i)
+            i += 1
+            frag = sentence[k : i+1]
+        if not tmplist:
+            tmplist.append(k)
+        DAG[k] = tmplist
+    return DAG
+
+class DAG_mod:
+    def __init__(self,sentence):
+        self.sentence = sentence
+        self.DAG = dag(sentence)
+        self.unfinish_path = [[]]
+        self.finish_path = []
+        self.length = len(sentence)
+
+    def decode_first(self, path):
+        path_length = len("".join(path))
+        if path_length == self.length:
+            self.finish_path.append(path)
             return
+        candidates = self.DAG[path_length]
+        new_path = []
+        for candidate in candidates:
+            new_path.append(path + [self.sentence[path_length : candidate + 1]])
+        self.unfinish_path = self.unfinish_path + new_path
+        return
 
-        for end in range(start + 1, len(sentence) + 1):
-            if sentence[start:end] in Dict:
-                path.append(sentence[start:end])
-                back_f(end, path)
-                path.pop()
+    def decode_last(self):
+        while self.unfinish_path != []:
+            path = self.unfinish_path.pop()
+            self.decode_first(path)
 
-    back_f(0, [])
-    return target
+sentence = "经常有意见分歧"
+DAG_D = DAG_mod(sentence)
+DAG_D.decode_last()
+print(DAG_D.finish_path)
 
-if __name__ == "__main__":
-    target = all_cut(sentence, Dict)
-    print(target)
