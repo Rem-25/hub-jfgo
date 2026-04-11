@@ -1,19 +1,15 @@
 import json
 import re
-import os
 import torch
-import random
-import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader,Dataset
 from collections import defaultdict
 from transformers import BertTokenizer
-
-
+"""与命名实体识别的loader无区别"""
 
 class DataGenerator:
-    def __init__(self, data_path, config):
+    def __init__(self,data_path, config):
+        self.data_path = data_path
         self.config = config
-        self.path = data_path
         self.tokenizer = load_vocab(config["bert_path"])
         self.sentences = []
         self.schema = self.load_schema(config["schema_path"])
@@ -21,53 +17,53 @@ class DataGenerator:
 
     def load(self):
         self.data = []
-        with open(self.path, encoding="utf8") as f:
+        with open(self.data_path, "r", encoding="utf-8") as f:
             segments = f.read().split("\n\n")
             for segment in segments:
-                sentenece = []
-                labels = [8] #cls_token
-                for line in segment.split("\n"):
+                sentence = []
+                labels = [8]
+                for line in segment.split('\n'):
                     if line.strip() == "":
                         continue
                     char, label = line.split()
-                    sentenece.append(char)
+                    sentence.append(char)
                     labels.append(self.schema[label])
-                sentence = "".join(sentenece)
+                sentence = "".join(sentence)
                 self.sentences.append(sentence)
-                input_ids = self.encode_sentence(sentenece)
+                input_ids = self.encode_sentence(sentence)
                 labels = self.padding(labels, -1)
                 self.data.append([torch.LongTensor(input_ids), torch.LongTensor(labels)])
         return
 
-    def encode_sentence(self, text, padding=True):
-        return self.tokenizer.encode(text, 
-                                     padding="max_length",
-                                     max_length=self.config["max_length"],
-                                     truncation=True)
+    def encode_sentence(self, text, padding = True):
+        return self.tokenizer.encode(text,
+                                     padding = "max_length",
+                                     max_length = self.config["max_length"],
+                                     truncation = True)
 
-    def decode(self, sentence, labels):
+    def decode(self, sentence, labels): #命名实体提取，提取到results这个字典里
         sentence = "$" + sentence
-        labels = "".join([str(x) for x in labels[:len(sentence)+2]])
+        labels = "".join([str(x) for x in labels[:len(sentence)+2]]) #包含了句子开头的CLS和句子结尾的SEP
         results = defaultdict(list)
-        for location in re.finditer("(04+)", labels):
-            s, e = location.span()
+        for location in re.finditer("(04+)",labels):
+            s, e =location.span()
             print("location", s,e)
             results["LOCATION"].append(sentence[s:e])
         for location in re.finditer("(15+)", labels):
             s, e = location.span()
-            print("org", s,e)
+            print("org", s, e)
             results["ORGANIZATION"].append(sentence[s:e])
         for location in re.finditer("(26+)", labels):
             s, e = location.span()
-            print("per", s,e)
+            print("per", s, e)
             results["PERSON"].append(sentence[s:e])
         for location in re.finditer("(37+)", labels):
             s, e = location.span()
-            print("time", s,e)
+            print("time", s, e)
             results["TIME"].append(sentence[s:e])
         return results
-    
-    def padding(self, input_id, pad_token=0):
+
+    def padding(self, input_id, pad_token = 0):
         input_id = input_id[:self.config["max_length"]]
         input_id += [pad_token] * (self.config["max_length"] - len(input_id))
         return input_id
@@ -75,11 +71,11 @@ class DataGenerator:
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, index):
-        return self.data[index]
+    def __getitem__(self, idx):
+        return self.data[idx]
 
-    def load_schema(self, path):
-        with open(path, encoding="utf8") as f:
+    def load_schema(self, schema_path):
+        with open(schema_path, "r", encoding="utf-8") as f:
             return json.load(f)
 
 def load_vocab(vocab_path):
@@ -87,16 +83,17 @@ def load_vocab(vocab_path):
 
 def load_data(data_path, config, shuffle=True):
     dg = DataGenerator(data_path, config)
-    dl = DataLoader(dg, batch_size=config["batch_size"], shuffle=shuffle)
+    dl =DataLoader(dg, batch_size=config["batch_size"], shuffle=shuffle)
     return dl
-
-
 
 if __name__ == "__main__":
     from config import Config
-    dg = DataGenerator("ner_data/train", Config)
-    dl = DataLoader(dg, batch_size=32)  
+    dg = DataGenerator("ner_data/train",Config)
+    dl = DataLoader(dg, batch_size=32)
     for x,y in dl:
         print(x.shape, y.shape)
-        print(x[1], y[1])
-        input()
+
+
+
+
+
